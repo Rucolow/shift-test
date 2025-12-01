@@ -1,5 +1,7 @@
 """Streamlit web application for hospital shift management."""
 import streamlit as st
+import pandas as pd
+import calendar as cal_module
 from datetime import datetime, date
 from typing import Optional
 import json
@@ -102,177 +104,117 @@ def get_staff_preference_summary(staff_id: str) -> dict:
 
 
 # ============================================================================
-# Calendar HTML Generation
+# Calendar Display Functions (Native Streamlit)
 # ============================================================================
 
-def generate_calendar_html(calendar: list[DayInfo], schedule: Optional[MonthlySchedule] = None) -> str:
-    """Generate an HTML calendar view."""
-    # CSS styles
-    css = """
-    <style>
-        .calendar-container {
-            font-family: 'Hiragino Kaku Gothic Pro', 'Meiryo', sans-serif;
-        }
-        .calendar-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-        }
-        .calendar-table th, .calendar-table td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: center;
-            min-width: 40px;
-        }
-        .calendar-table th {
-            background-color: #4a6fa5;
-            color: white;
-            font-weight: bold;
-        }
-        .calendar-table th.saturday {
-            background-color: #5a8fcf;
-        }
-        .calendar-table th.sunday {
-            background-color: #e57373;
-        }
-        .day-cell {
-            vertical-align: top;
-            height: 80px;
-            position: relative;
-        }
-        .day-number {
-            font-weight: bold;
-            font-size: 14px;
-        }
-        .day-saturday {
-            color: #1976d2;
-        }
-        .day-sunday, .day-holiday {
-            color: #d32f2f;
-        }
-        .holiday-name {
-            font-size: 10px;
-            color: #d32f2f;
-        }
-        .shift-info {
-            font-size: 11px;
-            margin-top: 5px;
-        }
-        .shift-early { color: #2e7d32; }
-        .shift-normal { color: #1565c0; }
-        .shift-late { color: #6a1b9a; }
-        .shift-standby {
-            background-color: #fff3e0;
-            border-radius: 3px;
-            padding: 2px 4px;
-        }
-        .empty-cell {
-            background-color: #f5f5f5;
-        }
-    </style>
-    """
-
-    # Create day lookup
-    day_info_map = {d.day: d for d in calendar}
-
-    # Header row
-    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
-    header_classes = ["", "", "", "", "", "saturday", "sunday"]
-
-    header_html = "<tr>"
-    for i, wd in enumerate(weekdays):
-        header_html += f'<th class="{header_classes[i]}">{wd}</th>'
-    header_html += "</tr>"
-
-    # Body rows (5 weeks for September 2025)
-    body_html = ""
-    day = 1
-
-    # September 2025 starts on Monday
-    for week in range(5):
-        body_html += "<tr>"
-        for weekday in range(7):
-            if day <= 30:
-                day_data = day_info_map.get(day)
-
-                # Determine day class
-                day_class = "day-number"
-                if day_data:
-                    if day_data.day_type == DayType.SUNDAY:
-                        day_class += " day-sunday"
-                    elif day_data.day_type == DayType.SATURDAY:
-                        day_class += " day-saturday"
-                    elif day_data.day_type == DayType.HOLIDAY:
-                        day_class += " day-holiday"
-
-                # Holiday name if applicable
-                holiday_html = ""
-                if day_data and day_data.note:
-                    holiday_html = f'<div class="holiday-name">{day_data.note}</div>'
-
-                # Shift information if schedule exists
-                shift_html = ""
-                if schedule:
-                    shift_html = generate_day_shift_html(schedule, day)
-
-                body_html += f'''
-                <td class="day-cell">
-                    <div class="{day_class}">{day}</div>
-                    {holiday_html}
-                    {shift_html}
-                </td>
-                '''
-                day += 1
-            else:
-                body_html += '<td class="empty-cell"></td>'
-        body_html += "</tr>"
-
-    # Combine everything
-    html = f'''
-    {css}
-    <div class="calendar-container">
-        <table class="calendar-table">
-            <thead>{header_html}</thead>
-            <tbody>{body_html}</tbody>
-        </table>
-    </div>
-    '''
-
-    return html
-
-
-def generate_day_shift_html(schedule: MonthlySchedule, day: int) -> str:
-    """Generate HTML for shifts on a specific day."""
+def get_day_shift_summary(schedule: MonthlySchedule, day: int, staff_list: list[Staff]) -> dict:
+    """Get shift summary for a specific day."""
     assignments = [a for a in schedule.assignments if a.day == day and a.shift_type != ShiftType.OFF]
 
-    if not assignments:
-        return '<div class="shift-info">-</div>'
-
-    # Count by shift type
     early_count = sum(1 for a in assignments if a.shift_type == ShiftType.EARLY)
     normal_count = sum(1 for a in assignments if a.shift_type == ShiftType.NORMAL)
     late_count = sum(1 for a in assignments if a.shift_type == ShiftType.LATE)
 
-    # Standby person
     standby_id = schedule.standby_assignments.get(day)
-
-    html = '<div class="shift-info">'
-    if early_count > 0:
-        html += f'<span class="shift-early">7:30×{early_count}</span> '
-    if normal_count > 0:
-        html += f'<span class="shift-normal">8:00×{normal_count}</span> '
-    if late_count > 0:
-        html += f'<span class="shift-late">9:00×{late_count}</span>'
-    html += '</div>'
-
+    standby_name = None
     if standby_id:
-        staff_list = get_staff_list()
         staff_map = {s.id: s for s in staff_list}
         staff = staff_map.get(standby_id)
-        name = staff.name if staff else standby_id
-        html += f'<div class="shift-standby">待機: {name}</div>'
+        standby_name = staff.name if staff else standby_id
 
-    return html
+    return {
+        "early": early_count,
+        "normal": normal_count,
+        "late": late_count,
+        "standby": standby_name
+    }
+
+
+def render_calendar_native(calendar_data: list[DayInfo], schedule: Optional[MonthlySchedule], year: int, month: int):
+    """Render calendar using native Streamlit components."""
+    st.subheader(f"{year}年{month}月 シフトカレンダー")
+
+    # Legend
+    legend_cols = st.columns(4)
+    with legend_cols[0]:
+        st.write(":green[●] 7:30 (早番)")
+    with legend_cols[1]:
+        st.write(":blue[●] 8:00 (通常)")
+    with legend_cols[2]:
+        st.write(":violet[●] 9:00 (遅番)")
+    with legend_cols[3]:
+        st.write(":orange[▣] 待機")
+
+    st.divider()
+
+    # Weekday header
+    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+    header_cols = st.columns(7)
+    for i, wd in enumerate(weekdays):
+        with header_cols[i]:
+            if wd == "土":
+                st.markdown(f"**:blue[{wd}]**")
+            elif wd == "日":
+                st.markdown(f"**:red[{wd}]**")
+            else:
+                st.markdown(f"**{wd}**")
+
+    # Create day lookup
+    day_info_map = {d.day: d for d in calendar_data}
+    staff_list = get_staff_list()
+
+    # Calendar body (September 2025 starts on Monday)
+    day = 1
+    for week in range(5):
+        cols = st.columns(7)
+        for weekday_idx in range(7):
+            with cols[weekday_idx]:
+                if day <= 30:
+                    day_data = day_info_map.get(day)
+
+                    # Day number with color based on day type
+                    if day_data:
+                        if day_data.day_type == DayType.SUNDAY:
+                            st.markdown(f"**:red[{day}]**")
+                        elif day_data.day_type == DayType.SATURDAY:
+                            st.markdown(f"**:blue[{day}]**")
+                        elif day_data.day_type == DayType.HOLIDAY:
+                            st.markdown(f"**:red[{day}]**")
+                        else:
+                            st.markdown(f"**{day}**")
+
+                        # Holiday name
+                        if day_data.note:
+                            st.caption(f":red[{day_data.note}]")
+
+                    # Shift info
+                    if schedule:
+                        shift_info = get_day_shift_summary(schedule, day, staff_list)
+                        shift_text = []
+                        if shift_info["early"] > 0:
+                            shift_text.append(f":green[7:30x{shift_info['early']}]")
+                        if shift_info["normal"] > 0:
+                            shift_text.append(f":blue[8:00x{shift_info['normal']}]")
+                        if shift_info["late"] > 0:
+                            shift_text.append(f":violet[9:00x{shift_info['late']}]")
+
+                        if shift_text:
+                            st.caption(" ".join(shift_text))
+                        else:
+                            st.caption("-")
+
+                        if shift_info["standby"]:
+                            st.caption(f":orange[待機:{shift_info['standby']}]")
+                    else:
+                        st.caption("-")
+
+                    day += 1
+                else:
+                    st.write("")  # Empty cell
+
+        # Add separator between weeks
+        if week < 4:
+            st.divider()
 
 
 # ============================================================================
@@ -341,11 +283,11 @@ def render_sidebar():
     pref_summary = get_staff_preference_summary(selected_staff_id)
 
     if pref_summary["requested_off"]:
-        st.sidebar.markdown(f"**希望休:** {', '.join(map(str, pref_summary['requested_off']))}日")
+        st.sidebar.write(f"**希望休:** {', '.join(map(str, pref_summary['requested_off']))}日")
     if pref_summary["requested_work"]:
-        st.sidebar.markdown(f"**勤務希望:** {', '.join(map(str, pref_summary['requested_work']))}日")
+        st.sidebar.write(f"**勤務希望:** {', '.join(map(str, pref_summary['requested_work']))}日")
     if pref_summary["standby_unavailable"]:
-        st.sidebar.markdown(f"**待機不可:** {', '.join(map(str, pref_summary['standby_unavailable']))}日")
+        st.sidebar.write(f"**待機不可:** {', '.join(map(str, pref_summary['standby_unavailable']))}日")
 
     st.sidebar.divider()
 
@@ -361,21 +303,10 @@ def render_calendar_tab():
 
     calendar = get_september_2025_calendar()
     schedule = st.session_state.schedule
+    year = st.session_state.selected_year
+    month = st.session_state.selected_month
 
-    # Legend
-    legend_html = """
-    <div style="margin-bottom: 15px; font-size: 12px;">
-        <span style="color: #2e7d32; margin-right: 15px;">● 7:30 (早番)</span>
-        <span style="color: #1565c0; margin-right: 15px;">● 8:00 (通常)</span>
-        <span style="color: #6a1b9a; margin-right: 15px;">● 9:00 (遅番)</span>
-        <span style="background-color: #fff3e0; padding: 2px 6px; border-radius: 3px;">待機</span>
-    </div>
-    """
-    st.markdown(legend_html, unsafe_allow_html=True)
-
-    # Calendar
-    calendar_html = generate_calendar_html(calendar, schedule)
-    st.markdown(calendar_html, unsafe_allow_html=True)
+    render_calendar_native(calendar, schedule, year, month)
 
     if schedule is None:
         st.info("シフトを生成するには、サイドバーの「シフト生成」ボタンをクリックしてください。")
@@ -393,61 +324,12 @@ def render_table_tab():
 
     staff_list = get_staff_list()
     calendar = get_september_2025_calendar()
+    staff_map = {s.id: s for s in staff_list}
 
-    # Create table HTML
-    css = """
-    <style>
-        .shift-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 11px;
-        }
-        .shift-table th, .shift-table td {
-            border: 1px solid #ddd;
-            padding: 4px;
-            text-align: center;
-        }
-        .shift-table th {
-            background-color: #4a6fa5;
-            color: white;
-            position: sticky;
-            top: 0;
-        }
-        .shift-table th.staff-header {
-            background-color: #5c6bc0;
-        }
-        .shift-table .weekend {
-            background-color: #e3f2fd;
-        }
-        .shift-table .holiday {
-            background-color: #ffebee;
-        }
-        .cell-early { background-color: #c8e6c9; }
-        .cell-normal { background-color: #bbdefb; }
-        .cell-late { background-color: #e1bee7; }
-        .cell-off { background-color: #f5f5f5; color: #999; }
-        .cell-standby {
-            background-color: #fff3e0 !important;
-            font-weight: bold;
-        }
-    </style>
-    """
-
-    # Header
-    header_html = "<tr><th>スタッフ</th>"
-    for day_info in calendar:
-        day_class = ""
-        if day_info.day_type == DayType.SATURDAY:
-            day_class = "weekend"
-        elif day_info.day_type in (DayType.SUNDAY, DayType.HOLIDAY):
-            day_class = "holiday"
-        header_html += f'<th class="{day_class}">{day_info.day}<br>{day_info.weekday}</th>'
-    header_html += "</tr>"
-
-    # Body
-    body_html = ""
+    # Build DataFrame
+    data = []
     for staff in staff_list:
-        body_html += f'<tr><td class="staff-header">{staff.name}</td>'
+        row = {"スタッフ": staff.name}
         for day_info in calendar:
             assignment = next(
                 (a for a in schedule.assignments
@@ -457,53 +339,59 @@ def render_table_tab():
 
             if assignment:
                 if assignment.shift_type == ShiftType.OFF:
-                    cell_class = "cell-off"
                     text = "休"
                 elif assignment.shift_type == ShiftType.EARLY:
-                    cell_class = "cell-early"
                     text = "7:30"
                 elif assignment.shift_type == ShiftType.NORMAL:
-                    cell_class = "cell-normal"
                     text = "8:00"
                 else:
-                    cell_class = "cell-late"
                     text = "9:00"
 
                 if assignment.is_standby:
-                    cell_class += " cell-standby"
                     text += "*"
             else:
-                cell_class = "cell-off"
                 text = "-"
 
-            body_html += f'<td class="{cell_class}">{text}</td>'
-        body_html += "</tr>"
+            col_name = f"{day_info.day}({day_info.weekday})"
+            row[col_name] = text
+        data.append(row)
 
-    # Standby row
-    body_html += '<tr style="background-color: #fff8e1;"><td><strong>待機担当</strong></td>'
-    staff_map = {s.id: s for s in staff_list}
+    # Add standby row
+    standby_row = {"スタッフ": "【待機担当】"}
     for day_info in calendar:
         standby_id = schedule.standby_assignments.get(day_info.day)
         if standby_id:
             staff = staff_map.get(standby_id)
             name = staff.name if staff else standby_id
-            body_html += f'<td>{name}</td>'
         else:
-            body_html += '<td>-</td>'
-    body_html += "</tr>"
+            name = "-"
+        col_name = f"{day_info.day}({day_info.weekday})"
+        standby_row[col_name] = name
+    data.append(standby_row)
 
-    html = f"""
-    {css}
-    <div style="overflow-x: auto;">
-        <table class="shift-table">
-            <thead>{header_html}</thead>
-            <tbody>{body_html}</tbody>
-        </table>
-    </div>
-    """
+    df = pd.DataFrame(data)
 
-    st.markdown(html, unsafe_allow_html=True)
-    st.markdown("<p style='font-size: 11px; color: #666;'>* = 待機担当</p>", unsafe_allow_html=True)
+    # Display with st.dataframe
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        height=400
+    )
+
+    # Legend
+    st.caption("* = 待機担当")
+
+    # Color legend
+    legend_cols = st.columns(4)
+    with legend_cols[0]:
+        st.write(":green[7:30] = 早番")
+    with legend_cols[1]:
+        st.write(":blue[8:00] = 通常")
+    with legend_cols[2]:
+        st.write(":violet[9:00] = 遅番")
+    with legend_cols[3]:
+        st.write("休 = 休日")
 
 
 def render_statistics_tab():
@@ -519,61 +407,40 @@ def render_statistics_tab():
     # Statistics section
     st.subheader("スタッフ別統計")
 
-    # Create statistics table HTML
-    stats_html = """
-    <style>
-        .stats-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 20px;
-        }
-        .stats-table th, .stats-table td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: center;
-        }
-        .stats-table th {
-            background-color: #4a6fa5;
-            color: white;
-        }
-        .stats-table tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-    </style>
-    <table class="stats-table">
-        <thead>
-            <tr>
-                <th>スタッフ</th>
-                <th>勤務日数</th>
-                <th>休日数</th>
-                <th>7:30</th>
-                <th>8:00</th>
-                <th>9:00</th>
-                <th>待機回数</th>
-                <th>土日祝</th>
-                <th>希望休充足</th>
-            </tr>
-        </thead>
-        <tbody>
-    """
-
+    # Build statistics DataFrame
+    stats_data = []
     for stats in schedule.statistics:
-        stats_html += f"""
-        <tr>
-            <td>{stats.staff_name}</td>
-            <td>{stats.work_days}</td>
-            <td>{stats.off_days}</td>
-            <td>{stats.early_shifts}</td>
-            <td>{stats.normal_shifts}</td>
-            <td>{stats.late_shifts}</td>
-            <td>{stats.standby_count}</td>
-            <td>{stats.weekend_holiday_count}</td>
-            <td>{stats.requested_off_fulfilled}/{stats.requested_off_total}</td>
-        </tr>
-        """
+        stats_data.append({
+            "スタッフ": stats.staff_name,
+            "勤務日数": stats.work_days,
+            "休日数": stats.off_days,
+            "7:30": stats.early_shifts,
+            "8:00": stats.normal_shifts,
+            "9:00": stats.late_shifts,
+            "待機回数": stats.standby_count,
+            "土日祝": stats.weekend_holiday_count,
+            "希望休充足": f"{stats.requested_off_fulfilled}/{stats.requested_off_total}"
+        })
 
-    stats_html += "</tbody></table>"
-    st.markdown(stats_html, unsafe_allow_html=True)
+    stats_df = pd.DataFrame(stats_data)
+    st.dataframe(stats_df, use_container_width=True, hide_index=True)
+
+    # Summary metrics
+    st.subheader("サマリー")
+    metric_cols = st.columns(4)
+
+    total_work_days = sum(s.work_days for s in schedule.statistics)
+    avg_work_days = total_work_days / len(schedule.statistics) if schedule.statistics else 0
+    total_standby = sum(s.standby_count for s in schedule.statistics)
+
+    with metric_cols[0]:
+        st.metric("総勤務日数", total_work_days)
+    with metric_cols[1]:
+        st.metric("平均勤務日数", f"{avg_work_days:.1f}")
+    with metric_cols[2]:
+        st.metric("総待機回数", total_standby)
+    with metric_cols[3]:
+        st.metric("スタッフ数", len(schedule.statistics))
 
     # Constraint violations
     if schedule.constraint_violations:
@@ -597,110 +464,48 @@ def render_preferences_tab():
     staff_list = get_staff_list()
     calendar = get_september_2025_calendar()
 
-    # Create preferences table HTML
-    css = """
-    <style>
-        .pref-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 20px;
-        }
-        .pref-table th, .pref-table td {
-            border: 1px solid #ddd;
-            padding: 10px;
-            text-align: left;
-        }
-        .pref-table th {
-            background-color: #4a6fa5;
-            color: white;
-        }
-        .pref-table tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        .pref-off {
-            background-color: #ffcdd2;
-            color: #c62828;
-            padding: 2px 6px;
-            border-radius: 3px;
-            margin: 2px;
-            display: inline-block;
-        }
-        .pref-work {
-            background-color: #c8e6c9;
-            color: #2e7d32;
-            padding: 2px 6px;
-            border-radius: 3px;
-            margin: 2px;
-            display: inline-block;
-        }
-        .pref-standby {
-            background-color: #fff3e0;
-            color: #e65100;
-            padding: 2px 6px;
-            border-radius: 3px;
-            margin: 2px;
-            display: inline-block;
-        }
-    </style>
-    """
-
-    table_html = """
-    <table class="pref-table">
-        <thead>
-            <tr>
-                <th>スタッフ</th>
-                <th>希望休</th>
-                <th>勤務希望</th>
-                <th>待機不可</th>
-            </tr>
-        </thead>
-        <tbody>
-    """
-
+    # Build preferences DataFrame
+    pref_data = []
     for staff in staff_list:
         pref_summary = get_staff_preference_summary(staff.id)
 
-        off_html = ""
+        off_list = []
         for day in pref_summary["requested_off"]:
             day_info = next((d for d in calendar if d.day == day), None)
             weekday = day_info.weekday if day_info else ""
-            off_html += f'<span class="pref-off">{day}日({weekday})</span> '
+            off_list.append(f"{day}日({weekday})")
 
-        work_html = ""
+        work_list = []
         for day in pref_summary["requested_work"]:
             day_info = next((d for d in calendar if d.day == day), None)
             weekday = day_info.weekday if day_info else ""
-            work_html += f'<span class="pref-work">{day}日({weekday})</span> '
+            work_list.append(f"{day}日({weekday})")
 
-        standby_html = ""
+        standby_list = []
         for day in pref_summary["standby_unavailable"]:
             day_info = next((d for d in calendar if d.day == day), None)
             weekday = day_info.weekday if day_info else ""
-            standby_html += f'<span class="pref-standby">{day}日({weekday})</span> '
+            standby_list.append(f"{day}日({weekday})")
 
-        table_html += f"""
-        <tr>
-            <td><strong>{staff.name}</strong> ({staff.staff_type.value})</td>
-            <td>{off_html if off_html else '-'}</td>
-            <td>{work_html if work_html else '-'}</td>
-            <td>{standby_html if standby_html else '-'}</td>
-        </tr>
-        """
+        pref_data.append({
+            "スタッフ": f"{staff.name} ({staff.staff_type.value})",
+            "希望休": ", ".join(off_list) if off_list else "-",
+            "勤務希望": ", ".join(work_list) if work_list else "-",
+            "待機不可": ", ".join(standby_list) if standby_list else "-"
+        })
 
-    table_html += "</tbody></table>"
-
-    st.markdown(css + table_html, unsafe_allow_html=True)
+    pref_df = pd.DataFrame(pref_data)
+    st.dataframe(pref_df, use_container_width=True, hide_index=True)
 
     # Legend
-    legend_html = """
-    <div style="margin-top: 20px; font-size: 12px;">
-        <strong>凡例:</strong>
-        <span class="pref-off" style="background-color: #ffcdd2; color: #c62828; padding: 2px 6px; border-radius: 3px; margin-left: 10px;">希望休</span>
-        <span class="pref-work" style="background-color: #c8e6c9; color: #2e7d32; padding: 2px 6px; border-radius: 3px; margin-left: 10px;">勤務希望</span>
-        <span class="pref-standby" style="background-color: #fff3e0; color: #e65100; padding: 2px 6px; border-radius: 3px; margin-left: 10px;">待機不可</span>
-    </div>
-    """
-    st.markdown(legend_html, unsafe_allow_html=True)
+    st.divider()
+    legend_cols = st.columns(3)
+    with legend_cols[0]:
+        st.write(":red[希望休] = 休みたい日")
+    with legend_cols[1]:
+        st.write(":green[勤務希望] = 働きたい日")
+    with legend_cols[2]:
+        st.write(":orange[待機不可] = 待機できない日")
 
     # Delete preference section
     st.divider()
@@ -770,7 +575,7 @@ def generate_schedule():
 
         if schedule:
             st.session_state.schedule = schedule
-            st.success("シフト生成が完了しました！")
+            st.success("シフト生成が完了しました!")
         else:
             st.error("解が見つかりませんでした。制約条件を確認してください。")
 
@@ -795,10 +600,7 @@ def main():
 
     # Title
     st.title("病院スタッフシフト管理システム")
-    st.markdown(
-        f"<p style='color: #666;'>対象期間: {st.session_state.selected_year}年{st.session_state.selected_month}月</p>",
-        unsafe_allow_html=True
-    )
+    st.caption(f"対象期間: {st.session_state.selected_year}年{st.session_state.selected_month}月")
 
     # Sidebar
     render_sidebar()
