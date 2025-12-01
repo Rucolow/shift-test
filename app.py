@@ -22,6 +22,7 @@ from src.data import (
 )
 from src.solver import ShiftScheduler
 from src.output import OutputGenerator
+from src.validator import validate_schedule, ValidationResult, ValidationItem
 
 
 # ============================================================================
@@ -483,6 +484,67 @@ def render_statistics_tab():
             st.info(suggestion)
     else:
         st.success("特に改善提案はありません。")
+
+    # Validation section
+    st.divider()
+    render_validation_section(schedule)
+
+
+def render_validation_section(schedule: MonthlySchedule):
+    """Render the shift validation section."""
+    st.subheader("🔍 シフト検証")
+
+    # Get required data for validation
+    staff_list = get_staff_list()
+    calendar = get_september_2025_calendar()
+    preferences = st.session_state.preferences
+    carryover = get_previous_month_carryover()
+
+    # Run validation
+    result = validate_schedule(schedule, staff_list, calendar, preferences, carryover)
+
+    # Summary
+    if result.all_passed:
+        st.success(f"✅ 全チェック通過: {result.total_checks}項目中 {result.passed_checks}項目 OK")
+    else:
+        failed = result.total_checks - result.passed_checks
+        st.error(f"⚠️ 違反あり: {result.total_checks}項目中 {failed}項目 NG")
+
+    st.divider()
+
+    # Detailed results
+    for item in result.items:
+        render_validation_item(item)
+
+
+def render_validation_item(item: ValidationItem, indent: int = 0):
+    """Render a single validation item."""
+    prefix = "  " * indent
+
+    if item.passed:
+        icon = "✅"
+        color = "green"
+    else:
+        icon = "❌"
+        color = "red"
+
+    # Main item
+    if item.sub_items:
+        # Has sub-items, use expander
+        with st.expander(f"{icon} {item.name}", expanded=not item.passed):
+            for sub_item in item.sub_items:
+                render_validation_item(sub_item, indent + 1)
+    else:
+        # No sub-items, show details
+        if item.passed:
+            st.write(f"{icon} **{item.name}**: OK")
+            if item.details:
+                for detail in item.details:
+                    st.caption(f"  {detail}")
+        else:
+            st.write(f"{icon} **:{color}[{item.name}]**: NG")
+            for detail in item.details:
+                st.write(f"  - :{color}[{detail}]")
 
 
 def render_preferences_tab():
