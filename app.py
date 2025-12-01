@@ -107,27 +107,53 @@ def get_staff_preference_summary(staff_id: str) -> dict:
 # Calendar Display Functions (Native Streamlit)
 # ============================================================================
 
-def get_day_shift_summary(schedule: MonthlySchedule, day: int, staff_list: list[Staff]) -> dict:
-    """Get shift summary for a specific day."""
+def get_day_staff_list(schedule: MonthlySchedule, day: int, day_info: DayInfo, staff_list: list[Staff]) -> list[dict]:
+    """Get list of staff working on a specific day with their shift info."""
     assignments = [a for a in schedule.assignments if a.day == day and a.shift_type != ShiftType.OFF]
-
-    early_count = sum(1 for a in assignments if a.shift_type == ShiftType.EARLY)
-    normal_count = sum(1 for a in assignments if a.shift_type == ShiftType.NORMAL)
-    late_count = sum(1 for a in assignments if a.shift_type == ShiftType.LATE)
-
+    staff_map = {s.id: s for s in staff_list}
     standby_id = schedule.standby_assignments.get(day)
-    standby_name = None
-    if standby_id:
-        staff_map = {s.id: s for s in staff_list}
-        staff = staff_map.get(standby_id)
-        standby_name = staff.name if staff else standby_id
+    is_weekday = day_info.day_type == DayType.WEEKDAY
 
-    return {
-        "early": early_count,
-        "normal": normal_count,
-        "late": late_count,
-        "standby": standby_name
-    }
+    result = []
+    for assignment in assignments:
+        staff = staff_map.get(assignment.staff_id)
+        if not staff:
+            continue
+
+        # Skip part-time staff on weekends/holidays
+        if staff.is_part_time() and not is_weekday:
+            continue
+
+        # Sort order: 7:30=0, 8:00=1, 9:00=2
+        if assignment.shift_type == ShiftType.EARLY:
+            sort_order = 0
+            shift_time = "7:30"
+        elif assignment.shift_type == ShiftType.NORMAL:
+            sort_order = 1
+            shift_time = "8:00"
+        else:
+            sort_order = 2
+            shift_time = "9:00"
+
+        # For part-time, show work hours instead
+        if staff.is_part_time():
+            display_time = staff.work_hours
+        else:
+            display_time = shift_time
+
+        result.append({
+            "name": staff.name,
+            "shift_type": assignment.shift_type,
+            "shift_time": shift_time,
+            "display_time": display_time,
+            "is_standby": assignment.staff_id == standby_id,
+            "is_part_time": staff.is_part_time(),
+            "sort_order": sort_order
+        })
+
+    # Sort by shift time
+    result.sort(key=lambda x: (x["sort_order"], x["name"]))
+    return result
 
 
 def render_calendar_native(calendar_data: list[DayInfo], schedule: Optional[MonthlySchedule], year: int, month: int):
@@ -135,29 +161,19 @@ def render_calendar_native(calendar_data: list[DayInfo], schedule: Optional[Mont
     st.subheader(f"{year}年{month}月 シフトカレンダー")
 
     # Legend
-    legend_cols = st.columns(4)
+    legend_cols = st.columns(5)
     with legend_cols[0]:
-        st.write(":green[●] 7:30 (早番)")
+        st.write(":blue[●] 7:30 (早番)")
     with legend_cols[1]:
-        st.write(":blue[●] 8:00 (通常)")
+        st.write(":green[●] 8:00 (通常)")
     with legend_cols[2]:
-        st.write(":violet[●] 9:00 (遅番)")
+        st.write(":orange[●] 9:00 (遅番)")
     with legend_cols[3]:
-        st.write(":orange[▣] 待機")
+        st.write(":red[[待機]]")
+    with legend_cols[4]:
+        st.write(":gray[パート]")
 
     st.divider()
-
-    # Weekday header
-    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
-    header_cols = st.columns(7)
-    for i, wd in enumerate(weekdays):
-        with header_cols[i]:
-            if wd == "土":
-                st.markdown(f"**:blue[{wd}]**")
-            elif wd == "日":
-                st.markdown(f"**:red[{wd}]**")
-            else:
-                st.markdown(f"**{wd}**")
 
     # Create day lookup
     day_info_map = {d.day: d for d in calendar_data}
@@ -171,41 +187,53 @@ def render_calendar_native(calendar_data: list[DayInfo], schedule: Optional[Mont
             with cols[weekday_idx]:
                 if day <= 30:
                     day_data = day_info_map.get(day)
+                    weekday_name = day_data.weekday if day_data else ""
 
-                    # Day number with color based on day type
+                    # Day header with color based on day type
                     if day_data:
                         if day_data.day_type == DayType.SUNDAY:
-                            st.markdown(f"**:red[{day}]**")
+                            day_label = f":red[{day} ({weekday_name})]"
                         elif day_data.day_type == DayType.SATURDAY:
-                            st.markdown(f"**:blue[{day}]**")
+                            day_label = f":blue[{day} ({weekday_name})]"
                         elif day_data.day_type == DayType.HOLIDAY:
-                            st.markdown(f"**:red[{day}]**")
+                            day_label = f":red[{day} ({weekday_name})]"
                         else:
-                            st.markdown(f"**{day}**")
-
-                        # Holiday name
-                        if day_data.note:
-                            st.caption(f":red[{day_data.note}]")
-
-                    # Shift info
-                    if schedule:
-                        shift_info = get_day_shift_summary(schedule, day, staff_list)
-                        shift_text = []
-                        if shift_info["early"] > 0:
-                            shift_text.append(f":green[7:30x{shift_info['early']}]")
-                        if shift_info["normal"] > 0:
-                            shift_text.append(f":blue[8:00x{shift_info['normal']}]")
-                        if shift_info["late"] > 0:
-                            shift_text.append(f":violet[9:00x{shift_info['late']}]")
-
-                        if shift_text:
-                            st.caption(" ".join(shift_text))
-                        else:
-                            st.caption("-")
-
-                        if shift_info["standby"]:
-                            st.caption(f":orange[待機:{shift_info['standby']}]")
+                            day_label = f"{day} ({weekday_name})"
                     else:
+                        day_label = str(day)
+
+                    # Use expander for each day
+                    if schedule:
+                        staff_entries = get_day_staff_list(schedule, day, day_data, staff_list)
+                        count = len(staff_entries)
+                        expander_label = f"**{day_label}** ({count}名)"
+
+                        with st.expander(expander_label, expanded=False):
+                            # Holiday name
+                            if day_data and day_data.note:
+                                st.caption(f":red[{day_data.note}]")
+
+                            if staff_entries:
+                                for entry in staff_entries:
+                                    # Format: "名前 時間 [待機]"
+                                    standby_mark = " :red[[待機]]" if entry["is_standby"] else ""
+
+                                    if entry["is_part_time"]:
+                                        # Part-time: gray color with work hours
+                                        st.write(f":gray[{entry['name']} {entry['display_time']}]")
+                                    elif entry["shift_type"] == ShiftType.EARLY:
+                                        st.write(f":blue[{entry['name']} {entry['display_time']}]{standby_mark}")
+                                    elif entry["shift_type"] == ShiftType.NORMAL:
+                                        st.write(f":green[{entry['name']} {entry['display_time']}]{standby_mark}")
+                                    else:  # LATE
+                                        st.write(f":orange[{entry['name']} {entry['display_time']}]{standby_mark}")
+                            else:
+                                st.caption("勤務者なし")
+                    else:
+                        # No schedule yet
+                        st.markdown(f"**{day_label}**")
+                        if day_data and day_data.note:
+                            st.caption(f":red[{day_data.note}]")
                         st.caption("-")
 
                     day += 1
